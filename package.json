@@ -1,0 +1,10 @@
+{
+  "name": "browserfarm",
+  "version": "0.0.1",
+  "dependencies": {
+    "binaryjs": "0.1.4"
+  },
+  "scripts": {
+    "start": "server"
+  }
+}

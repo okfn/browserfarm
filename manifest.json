@@ -1,0 +1,25 @@
+{
+  "manifest_version": 2,
+  "name": "browserfarm",
+  "version": "0.0.1",
+  "description": "",
+  "permissions": [
+    "http://*/*",
+    "https://*/*",
+    "tabs",
+    "notifications",
+    "unlimitedStorage"
+  ],
+  "icons": {
+    "48" : "icon-48.png",
+    "128" : "icon-128.png"
+  },
+  "browser_action": {
+    "default_icon": "icon-19.png",
+    "default_title": "BrowserFarm",
+    "default_popup": "popup.html"
+  },
+  "background" : {
+    "scripts": ["assets/bundle.js"]
+  }
+}
