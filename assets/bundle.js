@@ -1,690 +1,475 @@
-/*! binary.js build:0.1.4, development. Copyright(c) 2012 Eric Zhang <eric@ericzhang.com> MIT Licensed */
-(function(exports){
-var binaryFeatures = {};
-binaryFeatures.useBlobBuilder = (function(){
-  try {
-    new Blob([]);
-    return false;
-  } catch (e) {
-    return true;
-  }
-})();
-
-binaryFeatures.useArrayBufferView = !binaryFeatures.useBlobBuilder && (function(){
-  try {
-    return (new Blob([new Uint8Array([])])).size === 0;
-  } catch (e) {
-    return true;
-  }
-})();
-binaryFeatures.supportsBinaryWebsockets = (function(){
-  try {
-    var wstest = new WebSocket('ws://null');
-    wstest.onerror = function(){};
-    if (typeof(wstest.binaryType) !== "undefined") {
-      return true;
-    } else {
-      return false;
-    }
-    wstest.close();
-    wstest = null;
-  } catch (e) {
-    return false;
-  }
-})();
-
-exports.binaryFeatures = binaryFeatures;
-exports.BlobBuilder = window.WebKitBlobBuilder || window.MozBlobBuilder || window.MSBlobBuilder || window.BlobBuilder;
-
-function BufferBuilder(){
-  this._pieces = [];
-  this._parts = [];
-}
-
-BufferBuilder.prototype.append = function(data) {
-  if(typeof data === 'number') {
-    this._pieces.push(data);
-  } else {
-    this._flush();
-    this._parts.push(data);
-  }
+(function(){var require = function (file, cwd) {
+    var resolved = require.resolve(file, cwd || '/');
+    var mod = require.modules[resolved];
+    if (!mod) throw new Error(
+        'Failed to resolve module ' + file + ', tried ' + resolved
+    );
+    var cached = require.cache[resolved];
+    var res = cached? cached.exports : mod();
+    return res;
 };
 
-BufferBuilder.prototype._flush = function() {
-  if (this._pieces.length > 0) {    
-    var buf = new Uint8Array(this._pieces);
-    if(!binaryFeatures.useArrayBufferView) {
-      buf = buf.buffer;
-    }
-    this._parts.push(buf);
-    this._pieces = [];
-  }
+require.paths = [];
+require.modules = {};
+require.cache = {};
+require.extensions = [".js",".coffee"];
+
+require._core = {
+    'assert': true,
+    'events': true,
+    'fs': true,
+    'path': true,
+    'vm': true
 };
 
-BufferBuilder.prototype.getBuffer = function() {
-  this._flush();
-  if(binaryFeatures.useBlobBuilder) {
-    var builder = new BlobBuilder();
-    for(var i = 0, ii = this._parts.length; i < ii; i++) {
-      builder.append(this._parts[i]);
-    }
-    return builder.getBlob();
-  } else {
-    return new Blob(this._parts);
-  }
-};
-exports.BinaryPack = {
-  unpack: function(data){
-    var unpacker = new Unpacker(data);
-    return unpacker.unpack();
-  },
-  pack: function(data){
-    var packer = new Packer();
-    var buffer = packer.pack(data);
-    return buffer;
-  }
-};
-
-function Unpacker (data){
-  // Data is ArrayBuffer
-  this.index = 0;
-  this.dataBuffer = data;
-  this.dataView = new Uint8Array(this.dataBuffer);
-  this.length = this.dataBuffer.byteLength;
-}
-
-
-Unpacker.prototype.unpack = function(){
-  var type = this.unpack_uint8();
-  if (type < 0x80){
-    var positive_fixnum = type;
-    return positive_fixnum;
-  } else if ((type ^ 0xe0) < 0x20){
-    var negative_fixnum = (type ^ 0xe0) - 0x20;
-    return negative_fixnum;
-  }
-  var size;
-  if ((size = type ^ 0xa0) <= 0x0f){
-    return this.unpack_raw(size);
-  } else if ((size = type ^ 0xb0) <= 0x0f){
-    return this.unpack_string(size);
-  } else if ((size = type ^ 0x90) <= 0x0f){
-    return this.unpack_array(size);
-  } else if ((size = type ^ 0x80) <= 0x0f){
-    return this.unpack_map(size);
-  }
-  switch(type){
-    case 0xc0:
-      return null;
-    case 0xc1:
-      return undefined;
-    case 0xc2:
-      return false;
-    case 0xc3:
-      return true;
-    case 0xca:
-      return this.unpack_float();
-    case 0xcb:
-      return this.unpack_double();
-    case 0xcc:
-      return this.unpack_uint8();
-    case 0xcd:
-      return this.unpack_uint16();
-    case 0xce:
-      return this.unpack_uint32();
-    case 0xcf:
-      return this.unpack_uint64();
-    case 0xd0:
-      return this.unpack_int8();
-    case 0xd1:
-      return this.unpack_int16();
-    case 0xd2:
-      return this.unpack_int32();
-    case 0xd3:
-      return this.unpack_int64();
-    case 0xd4:
-      return undefined;
-    case 0xd5:
-      return undefined;
-    case 0xd6:
-      return undefined;
-    case 0xd7:
-      return undefined;
-    case 0xd8:
-      size = this.unpack_uint16();
-      return this.unpack_string(size);
-    case 0xd9:
-      size = this.unpack_uint32();
-      return this.unpack_string(size);
-    case 0xda:
-      size = this.unpack_uint16();
-      return this.unpack_raw(size);
-    case 0xdb:
-      size = this.unpack_uint32();
-      return this.unpack_raw(size);
-    case 0xdc:
-      size = this.unpack_uint16();
-      return this.unpack_array(size);
-    case 0xdd:
-      size = this.unpack_uint32();
-      return this.unpack_array(size);
-    case 0xde:
-      size = this.unpack_uint16();
-      return this.unpack_map(size);
-    case 0xdf:
-      size = this.unpack_uint32();
-      return this.unpack_map(size);
-  }
-}
-
-Unpacker.prototype.unpack_uint8 = function(){
-  var byte = this.dataView[this.index] & 0xff;
-  this.index++;
-  return byte;
-};
-
-Unpacker.prototype.unpack_uint16 = function(){
-  var bytes = this.read(2);
-  var uint16 =
-    ((bytes[0] & 0xff) * 256) + (bytes[1] & 0xff);
-  this.index += 2;
-  return uint16;
-}
-
-Unpacker.prototype.unpack_uint32 = function(){
-  var bytes = this.read(4);
-  var uint32 =
-     ((bytes[0]  * 256 +
-       bytes[1]) * 256 +
-       bytes[2]) * 256 +
-       bytes[3];
-  this.index += 4;
-  return uint32;
-}
-
-Unpacker.prototype.unpack_uint64 = function(){
-  var bytes = this.read(8);
-  var uint64 =
-   ((((((bytes[0]  * 256 +
-       bytes[1]) * 256 +
-       bytes[2]) * 256 +
-       bytes[3]) * 256 +
-       bytes[4]) * 256 +
-       bytes[5]) * 256 +
-       bytes[6]) * 256 +
-       bytes[7];
-  this.index += 8;
-  return uint64;
-}
-
-
-Unpacker.prototype.unpack_int8 = function(){
-  var uint8 = this.unpack_uint8();
-  return (uint8 < 0x80 ) ? uint8 : uint8 - (1 << 8);
-};
-
-Unpacker.prototype.unpack_int16 = function(){
-  var uint16 = this.unpack_uint16();
-  return (uint16 < 0x8000 ) ? uint16 : uint16 - (1 << 16);
-}
-
-Unpacker.prototype.unpack_int32 = function(){
-  var uint32 = this.unpack_uint32();
-  return (uint32 < Math.pow(2, 31) ) ? uint32 :
-    uint32 - Math.pow(2, 32);
-}
-
-Unpacker.prototype.unpack_int64 = function(){
-  var uint64 = this.unpack_uint64();
-  return (uint64 < Math.pow(2, 63) ) ? uint64 :
-    uint64 - Math.pow(2, 64);
-}
-
-Unpacker.prototype.unpack_raw = function(size){
-  if ( this.length < this.index + size){
-    throw new Error('BinaryPackFailure: index is out of range'
-      + ' ' + this.index + ' ' + size + ' ' + this.length);
-  }
-  var buf = this.dataBuffer.slice(this.index, this.index + size);
-  this.index += size;
-  
-    //buf = util.bufferToString(buf);
-  
-  return buf;
-}
-
-Unpacker.prototype.unpack_string = function(size){
-  var bytes = this.read(size);
-  var i = 0, str = '', c, code;
-  while(i < size){
-    c = bytes[i];
-    if ( c < 128){
-      str += String.fromCharCode(c);
-      i++;
-    } else if ((c ^ 0xc0) < 32){
-      code = ((c ^ 0xc0) << 6) | (bytes[i+1] & 63);
-      str += String.fromCharCode(code);
-      i += 2;
-    } else {
-      code = ((c & 15) << 12) | ((bytes[i+1] & 63) << 6) |
-        (bytes[i+2] & 63);
-      str += String.fromCharCode(code);
-      i += 3;
-    }
-  }
-  this.index += size;
-  return str;
-}
-
-Unpacker.prototype.unpack_array = function(size){
-  var objects = new Array(size);
-  for(var i = 0; i < size ; i++){
-    objects[i] = this.unpack();
-  }
-  return objects;
-}
-
-Unpacker.prototype.unpack_map = function(size){
-  var map = {};
-  for(var i = 0; i < size ; i++){
-    var key  = this.unpack();
-    var value = this.unpack();
-    map[key] = value;
-  }
-  return map;
-}
-
-Unpacker.prototype.unpack_float = function(){
-  var uint32 = this.unpack_uint32();
-  var sign = uint32 >> 31;
-  var exp  = ((uint32 >> 23) & 0xff) - 127;
-  var fraction = ( uint32 & 0x7fffff ) | 0x800000;
-  return (sign == 0 ? 1 : -1) *
-    fraction * Math.pow(2, exp - 23);
-}
-
-Unpacker.prototype.unpack_double = function(){
-  var h32 = this.unpack_uint32();
-  var l32 = this.unpack_uint32();
-  var sign = h32 >> 31;
-  var exp  = ((h32 >> 20) & 0x7ff) - 1023;
-  var hfrac = ( h32 & 0xfffff ) | 0x100000;
-  var frac = hfrac * Math.pow(2, exp - 20) +
-    l32   * Math.pow(2, exp - 52);
-  return (sign == 0 ? 1 : -1) * frac;
-}
-
-Unpacker.prototype.read = function(length){
-  var j = this.index;
-  if (j + length <= this.length) {
-    return this.dataView.subarray(j, j + length);
-  } else {
-    throw new Error('BinaryPackFailure: read index out of range');
-  }
-}
-  
-function Packer (){
-  this.bufferBuilder = new BufferBuilder();
-}
-
-Packer.prototype.pack = function(value){
-  var type = typeof(value);
-  if (type == 'string'){
-    this.pack_string(value);
-  } else if (type == 'number'){
-    if (Math.floor(value) === value){
-      this.pack_integer(value);
-    } else{
-      this.pack_double(value);
-    }
-  } else if (type == 'boolean'){
-    if (value === true){
-      this.bufferBuilder.append(0xc3);
-    } else if (value === false){
-      this.bufferBuilder.append(0xc2);
-    }
-  } else if (type == 'undefined'){
-    this.bufferBuilder.append(0xc0);
-  } else if (type == 'object'){
-    if (value === null){
-      this.bufferBuilder.append(0xc0);
-    } else {
-      var constructor = value.constructor;
-      if (constructor == Array){
-        this.pack_array(value);
-      } else if (constructor == Blob || constructor == File) {
-        this.pack_bin(value);
-      } else if (constructor == ArrayBuffer) {
-        if(binaryFeatures.useArrayBufferView) {
-          this.pack_bin(new Uint8Array(value));
-        } else {
-          this.pack_bin(value);
+require.resolve = (function () {
+    return function (x, cwd) {
+        if (!cwd) cwd = '/';
+        
+        if (require._core[x]) return x;
+        var path = require.modules.path();
+        cwd = path.resolve('/', cwd);
+        var y = cwd || '/';
+        
+        if (x.match(/^(?:\.\.?\/|\/)/)) {
+            var m = loadAsFileSync(path.resolve(y, x))
+                || loadAsDirectorySync(path.resolve(y, x));
+            if (m) return m;
         }
-      } else if ('BYTES_PER_ELEMENT' in value){
-        if(binaryFeatures.useArrayBufferView) {
-          this.pack_bin(value);
-        } else {
-          this.pack_bin(value.buffer);
-        }
-      } else if (constructor == Object){
-        this.pack_object(value);
-      } else if (constructor == Date){
-        this.pack_string(value.toString());
-      } else if (typeof value.toBinaryPack == 'function'){
-        this.bufferBuilder.append(value.toBinaryPack());
-      } else {
-        throw new Error('Type "' + constructor.toString() + '" not yet supported');
-      }
-    }
-  } else {
-    throw new Error('Type "' + type + '" not yet supported');
-  }
-  return this.bufferBuilder.getBuffer();
-}
-
-
-Packer.prototype.pack_bin = function(blob){
-  var length = blob.length || blob.byteLength || blob.size;
-  if (length <= 0x0f){
-    this.pack_uint8(0xa0 + length);
-  } else if (length <= 0xffff){
-    this.bufferBuilder.append(0xda) ;
-    this.pack_uint16(length);
-  } else if (length <= 0xffffffff){
-    this.bufferBuilder.append(0xdb);
-    this.pack_uint32(length);
-  } else{
-    throw new Error('Invalid length');
-    return;
-  }
-  this.bufferBuilder.append(blob);
-}
-
-Packer.prototype.pack_string = function(str){
-  var length = str.length;
-  if (length <= 0x0f){
-    this.pack_uint8(0xb0 + length);
-  } else if (length <= 0xffff){
-    this.bufferBuilder.append(0xd8) ;
-    this.pack_uint16(length);
-  } else if (length <= 0xffffffff){
-    this.bufferBuilder.append(0xd9);
-    this.pack_uint32(length);
-  } else{
-    throw new Error('Invalid length');
-    return;
-  }
-  this.bufferBuilder.append(str);
-}
-
-Packer.prototype.pack_array = function(ary){
-  var length = ary.length;
-  if (length <= 0x0f){
-    this.pack_uint8(0x90 + length);
-  } else if (length <= 0xffff){
-    this.bufferBuilder.append(0xdc)
-    this.pack_uint16(length);
-  } else if (length <= 0xffffffff){
-    this.bufferBuilder.append(0xdd);
-    this.pack_uint32(length);
-  } else{
-    throw new Error('Invalid length');
-  }
-  for(var i = 0; i < length ; i++){
-    this.pack(ary[i]);
-  }
-}
-
-Packer.prototype.pack_integer = function(num){
-  if ( -0x20 <= num && num <= 0x7f){
-    this.bufferBuilder.append(num & 0xff);
-  } else if (0x00 <= num && num <= 0xff){
-    this.bufferBuilder.append(0xcc);
-    this.pack_uint8(num);
-  } else if (-0x80 <= num && num <= 0x7f){
-    this.bufferBuilder.append(0xd0);
-    this.pack_int8(num);
-  } else if ( 0x0000 <= num && num <= 0xffff){
-    this.bufferBuilder.append(0xcd);
-    this.pack_uint16(num);
-  } else if (-0x8000 <= num && num <= 0x7fff){
-    this.bufferBuilder.append(0xd1);
-    this.pack_int16(num);
-  } else if ( 0x00000000 <= num && num <= 0xffffffff){
-    this.bufferBuilder.append(0xce);
-    this.pack_uint32(num);
-  } else if (-0x80000000 <= num && num <= 0x7fffffff){
-    this.bufferBuilder.append(0xd2);
-    this.pack_int32(num);
-  } else if (-0x8000000000000000 <= num && num <= 0x7FFFFFFFFFFFFFFF){
-    this.bufferBuilder.append(0xd3);
-    this.pack_int64(num);
-  } else if (0x0000000000000000 <= num && num <= 0xFFFFFFFFFFFFFFFF){
-    this.bufferBuilder.append(0xcf);
-    this.pack_uint64(num);
-  } else{
-    throw new Error('Invalid integer');
-  }
-}
-
-Packer.prototype.pack_double = function(num){
-  var sign = 0;
-  if (num < 0){
-    sign = 1;
-    num = -num;
-  }
-  var exp  = Math.floor(Math.log(num) / Math.LN2);
-  var frac0 = num / Math.pow(2, exp) - 1;
-  var frac1 = Math.floor(frac0 * Math.pow(2, 52));
-  var b32   = Math.pow(2, 32);
-  var h32 = (sign << 31) | ((exp+1023) << 20) |
-      (frac1 / b32) & 0x0fffff;
-  var l32 = frac1 % b32;
-  this.bufferBuilder.append(0xcb);
-  this.pack_int32(h32);
-  this.pack_int32(l32);
-}
-
-Packer.prototype.pack_object = function(obj){
-  var keys = Object.keys(obj);
-  var length = keys.length;
-  if (length <= 0x0f){
-    this.pack_uint8(0x80 + length);
-  } else if (length <= 0xffff){
-    this.bufferBuilder.append(0xde);
-    this.pack_uint16(length);
-  } else if (length <= 0xffffffff){
-    this.bufferBuilder.append(0xdf);
-    this.pack_uint32(length);
-  } else{
-    throw new Error('Invalid length');
-  }
-  for(var prop in obj){
-    if (obj.hasOwnProperty(prop)){
-      this.pack(prop);
-      this.pack(obj[prop]);
-    }
-  }
-}
-
-Packer.prototype.pack_uint8 = function(num){
-  this.bufferBuilder.append(num);
-}
-
-Packer.prototype.pack_uint16 = function(num){
-  this.bufferBuilder.append(num >> 8);
-  this.bufferBuilder.append(num & 0xff);
-}
-
-Packer.prototype.pack_uint32 = function(num){
-  var n = num & 0xffffffff;
-  this.bufferBuilder.append((n & 0xff000000) >>> 24);
-  this.bufferBuilder.append((n & 0x00ff0000) >>> 16);
-  this.bufferBuilder.append((n & 0x0000ff00) >>>  8);
-  this.bufferBuilder.append((n & 0x000000ff));
-}
-
-Packer.prototype.pack_uint64 = function(num){
-  var high = num / Math.pow(2, 32);
-  var low  = num % Math.pow(2, 32);
-  this.bufferBuilder.append((high & 0xff000000) >>> 24);
-  this.bufferBuilder.append((high & 0x00ff0000) >>> 16);
-  this.bufferBuilder.append((high & 0x0000ff00) >>>  8);
-  this.bufferBuilder.append((high & 0x000000ff));
-  this.bufferBuilder.append((low  & 0xff000000) >>> 24);
-  this.bufferBuilder.append((low  & 0x00ff0000) >>> 16);
-  this.bufferBuilder.append((low  & 0x0000ff00) >>>  8);
-  this.bufferBuilder.append((low  & 0x000000ff));
-}
-
-Packer.prototype.pack_int8 = function(num){
-  this.bufferBuilder.append(num & 0xff);
-}
-
-Packer.prototype.pack_int16 = function(num){
-  this.bufferBuilder.append((num & 0xff00) >> 8);
-  this.bufferBuilder.append(num & 0xff);
-}
-
-Packer.prototype.pack_int32 = function(num){
-  this.bufferBuilder.append((num >>> 24) & 0xff);
-  this.bufferBuilder.append((num & 0x00ff0000) >>> 16);
-  this.bufferBuilder.append((num & 0x0000ff00) >>> 8);
-  this.bufferBuilder.append((num & 0x000000ff));
-}
-
-Packer.prototype.pack_int64 = function(num){
-  var high = Math.floor(num / Math.pow(2, 32));
-  var low  = num % Math.pow(2, 32);
-  this.bufferBuilder.append((high & 0xff000000) >>> 24);
-  this.bufferBuilder.append((high & 0x00ff0000) >>> 16);
-  this.bufferBuilder.append((high & 0x0000ff00) >>>  8);
-  this.bufferBuilder.append((high & 0x000000ff));
-  this.bufferBuilder.append((low  & 0xff000000) >>> 24);
-  this.bufferBuilder.append((low  & 0x00ff0000) >>> 16);
-  this.bufferBuilder.append((low  & 0x0000ff00) >>>  8);
-  this.bufferBuilder.append((low  & 0x000000ff));
-}
-/**
- * Light EventEmitter. Ported from Node.js/events.js
- * Eric Zhang
- */
-
-/**
- * EventEmitter class
- * Creates an object with event registering and firing methods
- */
-function EventEmitter() {
-  // Initialise required storage variables
-  this._events = {};
-}
-
-var isArray = Array.isArray;
-
-
-EventEmitter.prototype.addListener = function(type, listener, scope, once) {
-  if ('function' !== typeof listener) {
-    throw new Error('addListener only takes instances of Function');
-  }
-  
-  // To avoid recursion in the case that type == "newListeners"! Before
-  // adding it to the listeners, first emit "newListeners".
-  this.emit('newListener', type, typeof listener.listener === 'function' ?
-            listener.listener : listener);
+        
+        var n = loadNodeModulesSync(x, y);
+        if (n) return n;
+        
+        throw new Error("Cannot find module '" + x + "'");
+        
+        function loadAsFileSync (x) {
+            x = path.normalize(x);
+            if (require.modules[x]) {
+                return x;
+            }
             
-  if (!this._events[type]) {
-    // Optimize the case of one listener. Don't need the extra array object.
-    this._events[type] = listener;
-  } else if (isArray(this._events[type])) {
+            for (var i = 0; i < require.extensions.length; i++) {
+                var ext = require.extensions[i];
+                if (require.modules[x + ext]) return x + ext;
+            }
+        }
+        
+        function loadAsDirectorySync (x) {
+            x = x.replace(/\/+$/, '');
+            var pkgfile = path.normalize(x + '/package.json');
+            if (require.modules[pkgfile]) {
+                var pkg = require.modules[pkgfile]();
+                var b = pkg.browserify;
+                if (typeof b === 'object' && b.main) {
+                    var m = loadAsFileSync(path.resolve(x, b.main));
+                    if (m) return m;
+                }
+                else if (typeof b === 'string') {
+                    var m = loadAsFileSync(path.resolve(x, b));
+                    if (m) return m;
+                }
+                else if (pkg.main) {
+                    var m = loadAsFileSync(path.resolve(x, pkg.main));
+                    if (m) return m;
+                }
+            }
+            
+            return loadAsFileSync(x + '/index');
+        }
+        
+        function loadNodeModulesSync (x, start) {
+            var dirs = nodeModulesPathsSync(start);
+            for (var i = 0; i < dirs.length; i++) {
+                var dir = dirs[i];
+                var m = loadAsFileSync(dir + '/' + x);
+                if (m) return m;
+                var n = loadAsDirectorySync(dir + '/' + x);
+                if (n) return n;
+            }
+            
+            var m = loadAsFileSync(x);
+            if (m) return m;
+        }
+        
+        function nodeModulesPathsSync (start) {
+            var parts;
+            if (start === '/') parts = [ '' ];
+            else parts = path.normalize(start).split('/');
+            
+            var dirs = [];
+            for (var i = parts.length - 1; i >= 0; i--) {
+                if (parts[i] === 'node_modules') continue;
+                var dir = parts.slice(0, i + 1).join('/') + '/node_modules';
+                dirs.push(dir);
+            }
+            
+            return dirs;
+        }
+    };
+})();
 
-    // If we've already got an array, just append.
-    this._events[type].push(listener);
+require.alias = function (from, to) {
+    var path = require.modules.path();
+    var res = null;
+    try {
+        res = require.resolve(from + '/package.json', '/');
+    }
+    catch (err) {
+        res = require.resolve(from, '/');
+    }
+    var basedir = path.dirname(res);
+    
+    var keys = (Object.keys || function (obj) {
+        var res = [];
+        for (var key in obj) res.push(key);
+        return res;
+    })(require.modules);
+    
+    for (var i = 0; i < keys.length; i++) {
+        var key = keys[i];
+        if (key.slice(0, basedir.length + 1) === basedir + '/') {
+            var f = key.slice(basedir.length);
+            require.modules[to + f] = require.modules[basedir + f];
+        }
+        else if (key === basedir) {
+            require.modules[to] = require.modules[basedir];
+        }
+    }
+};
 
-  } else {
-    // Adding the second element, need to change to array.
-    this._events[type] = [this._events[type], listener];
+(function () {
+    var process = {};
+    
+    require.define = function (filename, fn) {
+        if (require.modules.__browserify_process) {
+            process = require.modules.__browserify_process();
+        }
+        
+        var dirname = require._core[filename]
+            ? ''
+            : require.modules.path().dirname(filename)
+        ;
+        
+        var require_ = function (file) {
+            var requiredModule = require(file, dirname);
+            var cached = require.cache[require.resolve(file, dirname)];
+
+            if (cached.parent === null) {
+                cached.parent = module_;
+            }
+
+            return requiredModule;
+        };
+        require_.resolve = function (name) {
+            return require.resolve(name, dirname);
+        };
+        require_.modules = require.modules;
+        require_.define = require.define;
+        require_.cache = require.cache;
+        var module_ = {
+            id : filename,
+            filename: filename,
+            exports : {},
+            loaded : false,
+            parent: null
+        };
+        
+        require.modules[filename] = function () {
+            require.cache[filename] = module_;
+            fn.call(
+                module_.exports,
+                require_,
+                module_,
+                module_.exports,
+                dirname,
+                filename,
+                process
+            );
+            module_.loaded = true;
+            return module_.exports;
+        };
+    };
+})();
+
+
+require.define("path",function(require,module,exports,__dirname,__filename,process){function filter (xs, fn) {
+    var res = [];
+    for (var i = 0; i < xs.length; i++) {
+        if (fn(xs[i], i, xs)) res.push(xs[i]);
+    }
+    return res;
+}
+
+// resolves . and .. elements in a path array with directory names there
+// must be no slashes, empty elements, or device names (c:\) in the array
+// (so also no leading and trailing slashes - it does not distinguish
+// relative and absolute paths)
+function normalizeArray(parts, allowAboveRoot) {
+  // if the path tries to go above the root, `up` ends up > 0
+  var up = 0;
+  for (var i = parts.length; i >= 0; i--) {
+    var last = parts[i];
+    if (last == '.') {
+      parts.splice(i, 1);
+    } else if (last === '..') {
+      parts.splice(i, 1);
+      up++;
+    } else if (up) {
+      parts.splice(i, 1);
+      up--;
+    }
+  }
+
+  // if the path is allowed to go above the root, restore leading ..s
+  if (allowAboveRoot) {
+    for (; up--; up) {
+      parts.unshift('..');
+    }
+  }
+
+  return parts;
+}
+
+// Regex to split a filename into [*, dir, basename, ext]
+// posix version
+var splitPathRe = /^(.+\/(?!$)|\/)?((?:.+?)?(\.[^.]*)?)$/;
+
+// path.resolve([from ...], to)
+// posix version
+exports.resolve = function() {
+var resolvedPath = '',
+    resolvedAbsolute = false;
+
+for (var i = arguments.length; i >= -1 && !resolvedAbsolute; i--) {
+  var path = (i >= 0)
+      ? arguments[i]
+      : process.cwd();
+
+  // Skip empty and invalid entries
+  if (typeof path !== 'string' || !path) {
+    continue;
+  }
+
+  resolvedPath = path + '/' + resolvedPath;
+  resolvedAbsolute = path.charAt(0) === '/';
+}
+
+// At this point the path should be resolved to a full absolute path, but
+// handle relative paths to be safe (might happen when process.cwd() fails)
+
+// Normalize the path
+resolvedPath = normalizeArray(filter(resolvedPath.split('/'), function(p) {
+    return !!p;
+  }), !resolvedAbsolute).join('/');
+
+  return ((resolvedAbsolute ? '/' : '') + resolvedPath) || '.';
+};
+
+// path.normalize(path)
+// posix version
+exports.normalize = function(path) {
+var isAbsolute = path.charAt(0) === '/',
+    trailingSlash = path.slice(-1) === '/';
+
+// Normalize the path
+path = normalizeArray(filter(path.split('/'), function(p) {
+    return !!p;
+  }), !isAbsolute).join('/');
+
+  if (!path && !isAbsolute) {
+    path = '.';
+  }
+  if (path && trailingSlash) {
+    path += '/';
   }
   
+  return (isAbsolute ? '/' : '') + path;
 };
 
-EventEmitter.prototype.on = EventEmitter.prototype.addListener;
 
-EventEmitter.prototype.once = function(type, listener, scope) {
-  if ('function' !== typeof listener) {
-    throw new Error('.once only takes instances of Function');
-  }
-
-  var self = this;
-  function g() {
-    self.removeListener(type, g);
-    listener.apply(this, arguments);
-  };
-
-  g.listener = listener;
-  self.on(type, g);
-
-  return this;
+// posix version
+exports.join = function() {
+  var paths = Array.prototype.slice.call(arguments, 0);
+  return exports.normalize(filter(paths, function(p, index) {
+    return p && typeof p === 'string';
+  }).join('/'));
 };
 
-EventEmitter.prototype.removeListener = function(type, listener, scope) {
-  if ('function' !== typeof listener) {
-    throw new Error('removeListener only takes instances of Function');
+
+exports.dirname = function(path) {
+  var dir = splitPathRe.exec(path)[1] || '';
+  var isWindows = false;
+  if (!dir) {
+    // No dirname
+    return '.';
+  } else if (dir.length === 1 ||
+      (isWindows && dir.length <= 3 && dir.charAt(1) === ':')) {
+    // It is just a slash or a drive letter with a slash
+    return dir;
+  } else {
+    // It is a full dirname, strip trailing slash
+    return dir.substring(0, dir.length - 1);
   }
+};
 
-  // does not use listeners(), so no side effect of creating _events[type]
-  if (!this._events[type]) return this;
 
-  var list = this._events[type];
+exports.basename = function(path, ext) {
+  var f = splitPathRe.exec(path)[2] || '';
+  // TODO: make this comparison case-insensitive on windows?
+  if (ext && f.substr(-1 * ext.length) === ext) {
+    f = f.substr(0, f.length - ext.length);
+  }
+  return f;
+};
 
-  if (isArray(list)) {
-    var position = -1;
-    for (var i = 0, length = list.length; i < length; i++) {
-      if (list[i] === listener ||
-          (list[i].listener && list[i].listener === listener))
-      {
-        position = i;
-        break;
-      }
+
+exports.extname = function(path) {
+  return splitPathRe.exec(path)[3] || '';
+};
+});
+
+require.define("__browserify_process",function(require,module,exports,__dirname,__filename,process){var process = module.exports = {};
+
+process.nextTick = (function () {
+    var queue = [];
+    var canPost = typeof window !== 'undefined'
+        && window.postMessage && window.addEventListener
+    ;
+    
+    if (canPost) {
+        window.addEventListener('message', function (ev) {
+            if (ev.source === window && ev.data === 'browserify-tick') {
+                ev.stopPropagation();
+                if (queue.length > 0) {
+                    var fn = queue.shift();
+                    fn();
+                }
+            }
+        }, true);
     }
+    
+    return function (fn) {
+        if (canPost) {
+            queue.push(fn);
+            window.postMessage('browserify-tick', '*');
+        }
+        else setTimeout(fn, 0);
+    };
+})();
 
-    if (position < 0) return this;
-    list.splice(position, 1);
-    if (list.length == 0)
-      delete this._events[type];
-  } else if (list === listener ||
-             (list.listener && list.listener === listener))
-  {
-    delete this._events[type];
-  }
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
 
-  return this;
+process.binding = function (name) {
+    if (name === 'evals') return (require)('vm')
+    else throw new Error('No such module. (Possibly not yet loaded)')
 };
 
+(function () {
+    var cwd = '/';
+    var path;
+    process.cwd = function () { return cwd };
+    process.chdir = function (dir) {
+        if (!path) path = require('path');
+        cwd = path.resolve(dir, cwd);
+    };
+})();
+});
 
-EventEmitter.prototype.off = EventEmitter.prototype.removeListener;
+require.define("/browserfarm/node_modules/emit-stream/package.json",function(require,module,exports,__dirname,__filename,process){module.exports = {"main":"index.js"}});
 
+require.define("/browserfarm/node_modules/emit-stream/index.js",function(require,module,exports,__dirname,__filename,process){var EventEmitter = require('events').EventEmitter;
+var through = require('through');
 
-EventEmitter.prototype.removeAllListeners = function(type) {
-  if (arguments.length === 0) {
-    this._events = {};
-    return this;
-  }
-
-  // does not use listeners(), so no side effect of creating _events[type]
-  if (type && this._events && this._events[type]) this._events[type] = null;
-  return this;
+exports = module.exports = function (ev) {
+    if (typeof ev.pipe === 'function') {
+        return exports.fromStream(ev);
+    }
+    else return exports.toStream(ev)
 };
 
-EventEmitter.prototype.listeners = function(type) {
-  if (!this._events[type]) this._events[type] = [];
-  if (!isArray(this._events[type])) {
-    this._events[type] = [this._events[type]];
-  }
-  return this._events[type];
+exports.toStream = function (ev) {
+    var s = through(
+        function write (args) {
+            this.emit('data', args);
+        },
+        function end () {
+            var ix = ev._emitStreams.indexOf(s);
+            ev._emitStreams.splice(ix, 1);
+        }
+    );
+    
+    if (!ev._emitStreams) {
+        ev._emitStreams = [];
+        
+        var emit = ev.emit;
+        ev.emit = function () {
+            if (s.writable) {
+                var args = [].slice.call(arguments);
+                ev._emitStreams.forEach(function (es) {
+                    es.write(args);
+                });
+            }
+            emit.apply(ev, arguments);
+        };
+    }
+    ev._emitStreams.push(s);
+    
+    return s;
 };
+
+exports.fromStream = function (s) {
+    var ev = new EventEmitter;
+    
+    s.pipe(through(function (args) {
+        ev.emit.apply(ev, args);
+    }));
+    
+    return ev;
+};
+});
+
+require.define("events",function(require,module,exports,__dirname,__filename,process){if (!process.EventEmitter) process.EventEmitter = function () {};
+
+var EventEmitter = exports.EventEmitter = process.EventEmitter;
+var isArray = typeof Array.isArray === 'function'
+    ? Array.isArray
+    : function (xs) {
+        return Object.prototype.toString.call(xs) === '[object Array]'
+    }
+;
+
+// By default EventEmitters will print a warning if more than
+// 10 listeners are added to it. This is a useful default which
+// helps finding memory leaks.
+//
+// Obviously not all Emitters should be limited to 10. This function allows
+// that to be increased. Set to zero for unlimited.
+var defaultMaxListeners = 10;
+EventEmitter.prototype.setMaxListeners = function(n) {
+  if (!this._events) this._events = {};
+  this._events.maxListeners = n;
+};
+
 
 EventEmitter.prototype.emit = function(type) {
-  var type = arguments[0];
+  // If there is no 'error' event listener then throw.
+  if (type === 'error') {
+    if (!this._events || !this._events.error ||
+        (isArray(this._events.error) && !this._events.error.length))
+    {
+      if (arguments[1] instanceof Error) {
+        throw arguments[1]; // Unhandled 'error' event
+      } else {
+        throw new Error("Uncaught, unspecified 'error' event.");
+      }
+      return false;
+    }
+  }
+
+  if (!this._events) return false;
   var handler = this._events[type];
   if (!handler) return false;
 
@@ -702,91 +487,204 @@ EventEmitter.prototype.emit = function(type) {
         break;
       // slower
       default:
-        var l = arguments.length;
-        var args = new Array(l - 1);
-        for (var i = 1; i < l; i++) args[i - 1] = arguments[i];
+        var args = Array.prototype.slice.call(arguments, 1);
         handler.apply(this, args);
     }
     return true;
 
   } else if (isArray(handler)) {
-    var l = arguments.length;
-    var args = new Array(l - 1);
-    for (var i = 1; i < l; i++) args[i - 1] = arguments[i];
+    var args = Array.prototype.slice.call(arguments, 1);
 
     var listeners = handler.slice();
     for (var i = 0, l = listeners.length; i < l; i++) {
       listeners[i].apply(this, args);
     }
     return true;
+
   } else {
     return false;
   }
 };
 
+// EventEmitter is defined in src/node_events.cc
+// EventEmitter.prototype.emit() is also defined there.
+EventEmitter.prototype.addListener = function(type, listener) {
+  if ('function' !== typeof listener) {
+    throw new Error('addListener only takes instances of Function');
+  }
 
+  if (!this._events) this._events = {};
 
+  // To avoid recursion in the case that type == "newListeners"! Before
+  // adding it to the listeners, first emit "newListeners".
+  this.emit('newListener', type, listener);
 
-var util = {
-  inherits: function(ctor, superCtor) {
-    ctor.super_ = superCtor;
-    ctor.prototype = Object.create(superCtor.prototype, {
-      constructor: {
-        value: ctor,
-        enumerable: false,
-        writable: true,
-        configurable: true
+  if (!this._events[type]) {
+    // Optimize the case of one listener. Don't need the extra array object.
+    this._events[type] = listener;
+  } else if (isArray(this._events[type])) {
+
+    // Check for listener leak
+    if (!this._events[type].warned) {
+      var m;
+      if (this._events.maxListeners !== undefined) {
+        m = this._events.maxListeners;
+      } else {
+        m = defaultMaxListeners;
       }
-    });
-  },
-  extend: function(dest, source) {
-    for(var key in source) {
-      if(source.hasOwnProperty(key)) {
-        dest[key] = source[key];
-      }
-    }
-    return dest;
-  },
-  pack: BinaryPack.pack,
-  unpack: BinaryPack.unpack,
-  setZeroTimeout: (function(global) {
-    var timeouts = [];
-    var messageName = 'zero-timeout-message';
 
-    // Like setTimeout, but only takes a function argument.	 There's
-    // no time argument (always zero) and no arguments (you have to
-    // use a closure).
-    function setZeroTimeoutPostMessage(fn) {
-      timeouts.push(fn);
-      global.postMessage(messageName, '*');
-    }		
-
-    function handleMessage(event) {
-      if (event.source == global && event.data == messageName) {
-        if (event.stopPropagation) {
-          event.stopPropagation();
-        }
-        if (timeouts.length) {
-          timeouts.shift()();
-        }
+      if (m && m > 0 && this._events[type].length > m) {
+        this._events[type].warned = true;
+        console.error('(node) warning: possible EventEmitter memory ' +
+                      'leak detected. %d listeners added. ' +
+                      'Use emitter.setMaxListeners() to increase limit.',
+                      this._events[type].length);
+        console.trace();
       }
     }
-    if (global.addEventListener) {
-      global.addEventListener('message', handleMessage, true);
-    } else if (global.attachEvent) {
-      global.attachEvent('onmessage', handleMessage);
-    }
-    return setZeroTimeoutPostMessage;
-  }(this))
+
+    // If we've already got an array, just append.
+    this._events[type].push(listener);
+  } else {
+    // Adding the second element, need to change to array.
+    this._events[type] = [this._events[type], listener];
+  }
+
+  return this;
 };
 
+EventEmitter.prototype.on = EventEmitter.prototype.addListener;
 
+EventEmitter.prototype.once = function(type, listener) {
+  var self = this;
+  self.on(type, function g() {
+    self.removeListener(type, g);
+    listener.apply(this, arguments);
+  });
 
-function Stream() {
-  EventEmitter.call(this);
+  return this;
+};
+
+EventEmitter.prototype.removeListener = function(type, listener) {
+  if ('function' !== typeof listener) {
+    throw new Error('removeListener only takes instances of Function');
+  }
+
+  // does not use listeners(), so no side effect of creating _events[type]
+  if (!this._events || !this._events[type]) return this;
+
+  var list = this._events[type];
+
+  if (isArray(list)) {
+    var i = list.indexOf(listener);
+    if (i < 0) return this;
+    list.splice(i, 1);
+    if (list.length == 0)
+      delete this._events[type];
+  } else if (this._events[type] === listener) {
+    delete this._events[type];
+  }
+
+  return this;
+};
+
+EventEmitter.prototype.removeAllListeners = function(type) {
+  // does not use listeners(), so no side effect of creating _events[type]
+  if (type && this._events && this._events[type]) this._events[type] = null;
+  return this;
+};
+
+EventEmitter.prototype.listeners = function(type) {
+  if (!this._events) this._events = {};
+  if (!this._events[type]) this._events[type] = [];
+  if (!isArray(this._events[type])) {
+    this._events[type] = [this._events[type]];
+  }
+  return this._events[type];
+};
+});
+
+require.define("/browserfarm/node_modules/emit-stream/node_modules/through/package.json",function(require,module,exports,__dirname,__filename,process){module.exports = {"main":"index.js"}});
+
+require.define("/browserfarm/node_modules/emit-stream/node_modules/through/index.js",function(require,module,exports,__dirname,__filename,process){var Stream = require('stream')
+
+// through
+//
+// a stream that does nothing but re-emit the input.
+// useful for aggregating a series of changing but not ending streams into one stream)
+
+exports = module.exports = through
+through.through = through
+
+//create a readable writable stream.
+
+function through (write, end) {
+  write = write || function (data) { this.emit('data', data) }
+  end = end || function () { this.emit('end') }
+
+  var ended = false, destroyed = false
+  var stream = new Stream()
+  stream.readable = stream.writable = true
+  stream.paused = false  
+  stream.write = function (data) {
+    write.call(this, data)
+    return !stream.paused
+  }
+  //this will be registered as the first 'end' listener
+  //must call destroy next tick, to make sure we're after any
+  //stream piped from here. 
+  stream.on('end', function () {
+    stream.readable = false
+    if(!stream.writable)
+      process.nextTick(function () {
+        stream.destroy()
+      })
+  })
+
+  stream.end = function (data) {
+    if(ended) return 
+    //this breaks, because pipe doesn't check writable before calling end.
+    //throw new Error('cannot call end twice')
+    ended = true
+    if(arguments.length) stream.write(data)
+    this.writable = false
+    end.call(this)
+    if(!this.readable)
+      this.destroy()
+  }
+  stream.destroy = function () {
+    if(destroyed) return
+    destroyed = true
+    ended = true
+    stream.writable = stream.readable = false
+    stream.emit('close')
+  }
+  stream.pause = function () {
+    if(stream.paused) return
+    stream.paused = true
+    stream.emit('pause')
+  }
+  stream.resume = function () {
+    if(stream.paused) {
+      stream.paused = false
+      stream.emit('drain')
+    }
+  }
+  return stream
 }
 
-util.inherits(Stream, EventEmitter);
+});
+
+require.define("stream",function(require,module,exports,__dirname,__filename,process){var events = require('events');
+var util = require('util');
+
+function Stream() {
+  events.EventEmitter.call(this);
+}
+util.inherits(Stream, events.EventEmitter);
+module.exports = Stream;
+// Backwards-compat with node 0.4.x
+Stream.Stream = Stream;
 
 Stream.prototype.pipe = function(dest, options) {
   var source = this;
@@ -810,8 +708,12 @@ Stream.prototype.pipe = function(dest, options) {
   dest.on('drain', ondrain);
 
   // If the 'end' option is not supplied, dest.end() will be called when
-  // source gets the 'end' or 'close' events.  Only dest.end() once.
+  // source gets the 'end' or 'close' events.  Only dest.end() once, and
+  // only when all sources have ended.
   if (!dest._isStdio && (!options || options.end !== false)) {
+    dest._pipeCount = dest._pipeCount || 0;
+    dest._pipeCount++;
+
     source.on('end', onend);
     source.on('close', onclose);
   }
@@ -821,6 +723,16 @@ Stream.prototype.pipe = function(dest, options) {
     if (didOnEnd) return;
     didOnEnd = true;
 
+    dest._pipeCount--;
+
+    // remove the listeners
+    cleanup();
+
+    if (dest._pipeCount > 0) {
+      // waiting for other incoming streams to end.
+      return;
+    }
+
     dest.end();
   }
 
@@ -828,6 +740,16 @@ Stream.prototype.pipe = function(dest, options) {
   function onclose() {
     if (didOnEnd) return;
     didOnEnd = true;
+
+    dest._pipeCount--;
+
+    // remove the listeners
+    cleanup();
+
+    if (dest._pipeCount > 0) {
+      // waiting for other incoming streams to end.
+      return;
+    }
 
     dest.destroy();
   }
@@ -872,641 +794,998 @@ Stream.prototype.pipe = function(dest, options) {
   // Allow for unix-like usage: A.pipe(B).pipe(C)
   return dest;
 };
-function BlobReadStream(source, options){
-  Stream.call(this);
-  
-  options = util.extend({
-      readDelay: 0,
-      paused: false
-  }, options);
-  
-  this._source = source;
-  this._start = 0;
-  this._readChunkSize = options.chunkSize || source.size;
-  this._readDelay = options.readDelay;
-  
-  this.readable = true;
-  this.paused = options.paused;
-  
-  this._read();
+});
+
+require.define("util",function(require,module,exports,__dirname,__filename,process){var events = require('events');
+
+exports.print = function () {};
+exports.puts = function () {};
+exports.debug = function() {};
+
+exports.inspect = function(obj, showHidden, depth, colors) {
+  var seen = [];
+
+  var stylize = function(str, styleType) {
+    // http://en.wikipedia.org/wiki/ANSI_escape_code#graphics
+    var styles =
+        { 'bold' : [1, 22],
+          'italic' : [3, 23],
+          'underline' : [4, 24],
+          'inverse' : [7, 27],
+          'white' : [37, 39],
+          'grey' : [90, 39],
+          'black' : [30, 39],
+          'blue' : [34, 39],
+          'cyan' : [36, 39],
+          'green' : [32, 39],
+          'magenta' : [35, 39],
+          'red' : [31, 39],
+          'yellow' : [33, 39] };
+
+    var style =
+        { 'special': 'cyan',
+          'number': 'blue',
+          'boolean': 'yellow',
+          'undefined': 'grey',
+          'null': 'bold',
+          'string': 'green',
+          'date': 'magenta',
+          // "name": intentionally not styling
+          'regexp': 'red' }[styleType];
+
+    if (style) {
+      return '\033[' + styles[style][0] + 'm' + str +
+             '\033[' + styles[style][1] + 'm';
+    } else {
+      return str;
+    }
+  };
+  if (! colors) {
+    stylize = function(str, styleType) { return str; };
+  }
+
+  function format(value, recurseTimes) {
+    // Provide a hook for user-specified inspect functions.
+    // Check that value is an object with an inspect function on it
+    if (value && typeof value.inspect === 'function' &&
+        // Filter out the util module, it's inspect function is special
+        value !== exports &&
+        // Also filter out any prototype objects using the circular check.
+        !(value.constructor && value.constructor.prototype === value)) {
+      return value.inspect(recurseTimes);
+    }
+
+    // Primitive types cannot have properties
+    switch (typeof value) {
+      case 'undefined':
+        return stylize('undefined', 'undefined');
+
+      case 'string':
+        var simple = '\'' + JSON.stringify(value).replace(/^"|"$/g, '')
+                                                 .replace(/'/g, "\\'")
+                                                 .replace(/\\"/g, '"') + '\'';
+        return stylize(simple, 'string');
+
+      case 'number':
+        return stylize('' + value, 'number');
+
+      case 'boolean':
+        return stylize('' + value, 'boolean');
+    }
+    // For some reason typeof null is "object", so special case here.
+    if (value === null) {
+      return stylize('null', 'null');
+    }
+
+    // Look up the keys of the object.
+    var visible_keys = Object_keys(value);
+    var keys = showHidden ? Object_getOwnPropertyNames(value) : visible_keys;
+
+    // Functions without properties can be shortcutted.
+    if (typeof value === 'function' && keys.length === 0) {
+      if (isRegExp(value)) {
+        return stylize('' + value, 'regexp');
+      } else {
+        var name = value.name ? ': ' + value.name : '';
+        return stylize('[Function' + name + ']', 'special');
+      }
+    }
+
+    // Dates without properties can be shortcutted
+    if (isDate(value) && keys.length === 0) {
+      return stylize(value.toUTCString(), 'date');
+    }
+
+    var base, type, braces;
+    // Determine the object type
+    if (isArray(value)) {
+      type = 'Array';
+      braces = ['[', ']'];
+    } else {
+      type = 'Object';
+      braces = ['{', '}'];
+    }
+
+    // Make functions say that they are functions
+    if (typeof value === 'function') {
+      var n = value.name ? ': ' + value.name : '';
+      base = (isRegExp(value)) ? ' ' + value : ' [Function' + n + ']';
+    } else {
+      base = '';
+    }
+
+    // Make dates with properties first say the date
+    if (isDate(value)) {
+      base = ' ' + value.toUTCString();
+    }
+
+    if (keys.length === 0) {
+      return braces[0] + base + braces[1];
+    }
+
+    if (recurseTimes < 0) {
+      if (isRegExp(value)) {
+        return stylize('' + value, 'regexp');
+      } else {
+        return stylize('[Object]', 'special');
+      }
+    }
+
+    seen.push(value);
+
+    var output = keys.map(function(key) {
+      var name, str;
+      if (value.__lookupGetter__) {
+        if (value.__lookupGetter__(key)) {
+          if (value.__lookupSetter__(key)) {
+            str = stylize('[Getter/Setter]', 'special');
+          } else {
+            str = stylize('[Getter]', 'special');
+          }
+        } else {
+          if (value.__lookupSetter__(key)) {
+            str = stylize('[Setter]', 'special');
+          }
+        }
+      }
+      if (visible_keys.indexOf(key) < 0) {
+        name = '[' + key + ']';
+      }
+      if (!str) {
+        if (seen.indexOf(value[key]) < 0) {
+          if (recurseTimes === null) {
+            str = format(value[key]);
+          } else {
+            str = format(value[key], recurseTimes - 1);
+          }
+          if (str.indexOf('\n') > -1) {
+            if (isArray(value)) {
+              str = str.split('\n').map(function(line) {
+                return '  ' + line;
+              }).join('\n').substr(2);
+            } else {
+              str = '\n' + str.split('\n').map(function(line) {
+                return '   ' + line;
+              }).join('\n');
+            }
+          }
+        } else {
+          str = stylize('[Circular]', 'special');
+        }
+      }
+      if (typeof name === 'undefined') {
+        if (type === 'Array' && key.match(/^\d+$/)) {
+          return str;
+        }
+        name = JSON.stringify('' + key);
+        if (name.match(/^"([a-zA-Z_][a-zA-Z_0-9]*)"$/)) {
+          name = name.substr(1, name.length - 2);
+          name = stylize(name, 'name');
+        } else {
+          name = name.replace(/'/g, "\\'")
+                     .replace(/\\"/g, '"')
+                     .replace(/(^"|"$)/g, "'");
+          name = stylize(name, 'string');
+        }
+      }
+
+      return name + ': ' + str;
+    });
+
+    seen.pop();
+
+    var numLinesEst = 0;
+    var length = output.reduce(function(prev, cur) {
+      numLinesEst++;
+      if (cur.indexOf('\n') >= 0) numLinesEst++;
+      return prev + cur.length + 1;
+    }, 0);
+
+    if (length > 50) {
+      output = braces[0] +
+               (base === '' ? '' : base + '\n ') +
+               ' ' +
+               output.join(',\n  ') +
+               ' ' +
+               braces[1];
+
+    } else {
+      output = braces[0] + base + ' ' + output.join(', ') + ' ' + braces[1];
+    }
+
+    return output;
+  }
+  return format(obj, (typeof depth === 'undefined' ? 2 : depth));
+};
+
+
+function isArray(ar) {
+  return ar instanceof Array ||
+         Array.isArray(ar) ||
+         (ar && ar !== Object.prototype && isArray(ar.__proto__));
 }
 
-util.inherits(BlobReadStream, Stream);
+
+function isRegExp(re) {
+  return re instanceof RegExp ||
+    (typeof re === 'object' && Object.prototype.toString.call(re) === '[object RegExp]');
+}
 
 
-BlobReadStream.prototype.pause = function(){
-  this.paused = true;
+function isDate(d) {
+  if (d instanceof Date) return true;
+  if (typeof d !== 'object') return false;
+  var properties = Date.prototype && Object_getOwnPropertyNames(Date.prototype);
+  var proto = d.__proto__ && Object_getOwnPropertyNames(d.__proto__);
+  return JSON.stringify(proto) === JSON.stringify(properties);
+}
+
+function pad(n) {
+  return n < 10 ? '0' + n.toString(10) : n.toString(10);
+}
+
+var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
+              'Oct', 'Nov', 'Dec'];
+
+// 26 Feb 16:19:34
+function timestamp() {
+  var d = new Date();
+  var time = [pad(d.getHours()),
+              pad(d.getMinutes()),
+              pad(d.getSeconds())].join(':');
+  return [d.getDate(), months[d.getMonth()], time].join(' ');
+}
+
+exports.log = function (msg) {};
+
+exports.pump = null;
+
+var Object_keys = Object.keys || function (obj) {
+    var res = [];
+    for (var key in obj) res.push(key);
+    return res;
 };
 
-BlobReadStream.prototype.resume = function(){
-  this.paused = false;
-  this._read();
+var Object_getOwnPropertyNames = Object.getOwnPropertyNames || function (obj) {
+    var res = [];
+    for (var key in obj) {
+        if (Object.hasOwnProperty.call(obj, key)) res.push(key);
+    }
+    return res;
 };
 
-BlobReadStream.prototype.destroy = function(){
-  this.readable = false;
-  clearTimeout(this._timeoutId);
+var Object_create = Object.create || function (prototype, properties) {
+    // from es5-shim
+    var object;
+    if (prototype === null) {
+        object = { '__proto__' : null };
+    }
+    else {
+        if (typeof prototype !== 'object') {
+            throw new TypeError(
+                'typeof prototype[' + (typeof prototype) + '] != \'object\''
+            );
+        }
+        var Type = function () {};
+        Type.prototype = prototype;
+        object = new Type();
+        object.__proto__ = prototype;
+    }
+    if (typeof properties !== 'undefined' && Object.defineProperties) {
+        Object.defineProperties(object, properties);
+    }
+    return object;
 };
 
-BlobReadStream.prototype._read = function(){
-    
-  var self = this;
-  
-  function emitReadChunk(){
-    self._emitReadChunk();
-  }
-  
-  var readDelay = this._readDelay;
-  if (readDelay !== 0){
-    this._timeoutId = setTimeout(emitReadChunk, readDelay);
-  } else {
-    util.setZeroTimeout(emitReadChunk);
-  }
-    
+exports.inherits = function(ctor, superCtor) {
+  ctor.super_ = superCtor;
+  ctor.prototype = Object_create(superCtor.prototype, {
+    constructor: {
+      value: ctor,
+      enumerable: false,
+      writable: true,
+      configurable: true
+    }
+  });
 };
+});
 
-BlobReadStream.prototype._emitReadChunk = function(){
-    
-  if(this.paused || !this.readable) return;
-  
-  var chunkSize = Math.min(this._source.size - this._start, this._readChunkSize);
-  
-  if(chunkSize === 0){
-      this.readable = false;
-      this.emit("end");
-      return;
-  }
-  
-  var sourceEnd = this._start + chunkSize;
-  var chunk = (this._source.slice || this._source.webkitSlice || this._source.mozSlice).call(this._source, this._start, sourceEnd);
-  
-  this._start = sourceEnd;
-  this._read();
-  
-  this.emit("data", chunk);
-  
-};
+require.define("/browserfarm/node_modules/JSONStream/package.json",function(require,module,exports,__dirname,__filename,process){module.exports = {}});
+
+require.define("/browserfarm/node_modules/JSONStream/index.js",function(require,module,exports,__dirname,__filename,process){var Parser = require('jsonparse')
+  , Stream = require('stream').Stream
 
 /*
 
+  the value of this.stack that creationix's jsonparse has is weird.
 
+  it makes this code ugly, but his problem is way harder that mine,
+  so i'll forgive him.
 
-
-function BlobWriteStream(options){
-    
-    stream.Stream.call(this);
-    
-    options = _.extend({
-        onFull: onFull,
-        onEnd: function(){},
-        minBlockAllocSize: 0,
-        drainDelay:0
-    }, options);
-    
-    this._onFull = options.onFull;
-    this._onEnd = options.onEnd;
-    this._onWrite = options.onWrite;
-    
-    this._minBlockAllocSize = options.minBlockAllocSize;
-    this._maxBlockAllocSize = options.maxBlockAllocSize;
-    this._drainDelay = options.drainDelay;
-    
-    this._buffer = new Buffer(options.minBlockAllocSize);
-    this._destination = this._buffer;
-    this._destinationPos = 0;
-    
-    this._writeQueue = [];
-    this._pendingOnFull = false;
-    this._pendingQueueDrain = false;
-    
-    this.writable = true;
-    this.bytesWritten = 0;
-}
-
-util.inherits(BlobWriteStream, stream.Stream);
-
-BlobWriteStream.prototype.getBuffer = function(){
-    return this._buffer;
-};
-
-BlobWriteStream.prototype.write = function(data, encoding){
-    
-    if(!this.writable){
-        throw new Error("stream is not writable");
-    }
-    
-    if(!Buffer.isBuffer(data)){
-        data = new Buffer(data, encoding);
-    }
-    
-    if(data.length){
-        this._writeQueue.push(data);
-    }
-    
-    this._commit();
-    
-    return this._writeQueue.length === 0;
-};
-
-BlobWriteStream.prototype._commit = function(){
-    
-    var self = this;
-    
-    var destination = this._destination;
-    var writeQueue = this._writeQueue;
-    
-    var startDestinationPos = this._destinationPos;
-    
-    while(writeQueue.length && destination.length){
-        
-        var head = writeQueue[0];
-        
-        var copySize = Math.min(destination.length, head.length);
-        
-        head.copy(destination, 0, 0, copySize);
-        
-        head = head.slice(copySize);
-        destination = destination.slice(copySize);
-        
-        this.bytesWritten += copySize;
-        this._destinationPos += copySize;
-        
-        if(head.length === 0){
-            writeQueue.shift();
-        }
-        else{
-            writeQueue[0] = head;
-        }
-    }
-    
-    this._destination = destination;
-    
-    bytesCommitted = this._destinationPos - startDestinationPos;
-    if(bytesCommitted){
-        if(this._onWrite){
-            
-            if(writeQueue.length){
-                this._pendingQueueDrain = true;
-            }
-            
-            // By locking destination the buffer is frozen and the onWrite
-            // callback cannot miss any write commits
-            this._destination = emptyBuffer;
-            
-            var consumer = this._onWrite;
-            this._onWrite = null;
-            
-            consumer.call(this, function(nextCallback){
-                util.setZeroTimeout(function(){
-                    self._destination = destination;
-                    self._onWrite = nextCallback;
-                    self._commit();
-                });
-            }, consumer);
-            
-            return;
-        }
-    }
-    
-    if(writeQueue.length){
-        
-        this._pendingQueueDrain = true;
-        this._growBuffer();
-    }
-    else if(this._pendingQueueDrain){
-        
-        this._pendingQueueDrain = false;
-        
-        if(this._drainDelay !== 0){
-            setTimeout(function(){
-                self.emit("drain");
-            }, this._drainDelay);
-        }
-        else{
-            util.setZeroTimeout(function(){
-                self.emit("drain");
-            });
-        }
-    }
-};
-
-BlobWriteStream.prototype._growBuffer = function(){
-    
-    var self = this;
-    var writeQueue = this._writeQueue;
-    
-    var requestSize = this._minBlockAllocSize;
-    
-    var maxBlockAllocSize = this._maxBlockAllocSize;
-    var add = (maxBlockAllocSize === undefined ? function(a, b){return a + b;} : function(a, b){return Math.min(a + b, maxBlockAllocSize);});
-    
-    for(var i = 0, queueLength = writeQueue.length; i < queueLength; i++){
-        requestSize = add(requestSize, writeQueue[i].length);
-    }
-    
-    // Prevent concurrent onFull callbacks
-    if(this._pendingOnFull){
-        return;
-    }
-    this._pendingOnFull = true;
-    
-    this._onFull(this._buffer, requestSize, function(buffer, destination){
-        util.setZeroTimeout(function(){
-            
-            self._pendingOnFull = false;
-            
-            if(!destination){
-                if(self.writable){
-                    self.emit("error", new Error("buffer is full"));
-                }
-                self.destroy();
-                return;
-            }
-            
-            self._buffer = buffer;
-            self._destination = destination;
-            
-            self._commit();
-        });
-    });
-};
-
-BlobWriteStream.prototype.end = function(data, encoding){
-    
-    var self = this;
-    
-    function _end(){
-        self.writable = false;
-        self._onEnd();
-    }
-    
-    if(data){
-        if(this.write(data, encoding)){
-            _end();
-        }else{
-            self.writable = false;
-            this.once("drain", _end);
-        }
-    }
-    else{
-        _end();
-    }
-};
-
-BlobWriteStream.prototype.destroy = function(){
-    this.writable = false;
-    this._pendingQueueDrain = false;
-    this._writeQueue = [];
-};
-
-BlobWriteStream.prototype.consume = function(consume){
-    
-    this._buffer = this._buffer.slice(consume);
-    this._destinationPos -= consume;
-};
-
-BlobWriteStream.prototype.getCommittedSlice = function(){
-    return this._buffer.slice(0, this._destinationPos);
-};
-
-function onFull(buffer, extraSize, callback){
-    var newBuffer = new Buffer(buffer.length + extraSize);
-    buffer.copy(newBuffer);
-    callback(newBuffer, newBuffer.slice(buffer.length));
-}
 */
-exports.BlobReadStream = BlobReadStream;
 
-function BinaryStream(socket, id, create, meta) {
-  if (!(this instanceof BinaryStream)) return new BinaryStream(options);
-  
-  var self = this;
-  
-  Stream.call(this);
+exports.parse = function (path) {
 
-  
-  this.id = id;
-  this._socket = socket;
-  this._socket.addEventListener('error', function(error){
-    self.readable = false;
-    self.writable = false;
-    self.emit('error', error);
-  });
-  this._socket.addEventListener('close', function(code, message){
-    self._onClose();
-  });
-  
-  
-  this.writable = true;
-  this.readable = true;
-  this.paused = false;
-  
-  this._closed = false;
-  this._ended = false;
-  
-  if(create) {
-    // This is a stream we are creating
-    this._write(1, meta, this.id);
-  }
-}
-
-util.inherits(BinaryStream, Stream);
-
-
-BinaryStream.prototype._onClose = function() {
-  // Emit close event
-  if (this._closed) {
-    return;
-  }
-  this.readable = false;
-  this.writable = false;
-  this._closed = true;
-  this.emit('close');
-};
-
-// Write stream
-
-BinaryStream.prototype._onPause = function() {
-  // Emit pause event
-  this.paused = true;
-  this.emit('pause');
-};
-
-BinaryStream.prototype._onResume = function() {
-  // Emit resume event
-  this.paused = false;
-  this.emit('resume');
-  this.emit('drain');
-};
-
-BinaryStream.prototype._write = function(code, data, bonus, cb) {
-  var message = util.pack([code, data, bonus]);
-  return this._socket.send(message, {binary: true}, cb) !== false;
-};
-
-BinaryStream.prototype.write = function(data, cb) {
-  if(this.writable) {
-    var out = this._write(2, data, this.id, cb);
-    return !this.paused && out;
-  } else {
-    throw new Error('Stream is not writable');
-  }
-};
-
-BinaryStream.prototype.end = function() {
-  this._ended = true;
-  this.readable = false;
-  this._write(5, null, this.id);
-};
-
-BinaryStream.prototype.destroy = BinaryStream.prototype.destroySoon = function() {
-  this._onClose();
-  this._write(6, null, this.id);
-};
-
-
-// Read stream
-
-BinaryStream.prototype._onEnd = function() {
-  if(this._ended) { 
-    return;
-  }
-  this._ended = true;
-  this.readable = false;
-  this.emit('end');
-};
-
-BinaryStream.prototype._onData = function(data) {
-  // Dispatch 
-  this.emit('data', data);
-};
-
-BinaryStream.prototype.pause = function() {
-  this._onPause();
-  this._write(3, null, this.id);
-};
-
-BinaryStream.prototype.resume = function() {
-  this._onResume();
-  this._write(4, null, this.id);
-};
-
-
-function BinaryClient(socket, options) {
-  if (!(this instanceof BinaryClient)) return new BinaryClient(options);
-  
-  EventEmitter.call(this);
-  
-  var self = this;
-  
-  this._options = util.extend({
-    chunkSize: 40960
-  }, options);
-  
-  this.streams = {};
-  
-  if(typeof socket === 'string') {
-    this._nextId = 0;
-    this._socket = new WebSocket(socket);
-  } else {
-    // Use odd numbered ids for server originated streams
-    this._nextId = 1;
-    this._socket = socket;
-  }
-  
-  this._socket.binaryType = 'arraybuffer';
-  
-  this._socket.addEventListener('open', function(){
-    self.emit('open');
-  });
-  this._socket.addEventListener('error', function(error){
-    self.emit('error', error);
-  });
-  this._socket.addEventListener('close', function(code, message){
-    self.emit('close', code, message);
-  });
-  this._socket.addEventListener('message', function(data, flags){
-    util.setZeroTimeout(function(){
-  
-      // Message format
-      // [type, payload, bonus ]
-      //
-      // Reserved
-      // [ 0  , X , X ]
-      // 
-      //
-      // New stream
-      // [ 1  , Meta , new streamId ]
-      // 
-      //
-      // Data
-      // [ 2  , Data , streamId ]
-      // 
-      //
-      // Pause
-      // [ 3  , null , streamId ]
-      // 
-      //
-      // Resume
-      // [ 4  , null , streamId ]
-      // 
-      //
-      // End
-      // [ 5  , null , streamId ]
-      // 
-      //
-      // Close
-      // [ 6  , null , streamId ]
-      // 
-      
-      data = data.data;
-      
-      
-      data = util.unpack(data);
-      switch(data[0]) {
-        case 0:
-          // Reserved
-          break;
-        case 1:
-          var meta = data[1];
-          var streamId = data[2];
-          var binaryStream = self._receiveStream(streamId);
-          self.emit('stream', binaryStream, meta);
-          break;
-        case 2:
-          var payload = data[1];
-          var streamId = data[2];
-          var binaryStream = self.streams[streamId];
-          if(binaryStream) {
-            binaryStream._onData(payload);
-          } else {
-            self.emit('error', 'Received `data` message for unknown stream: ' + streamId);
-          }
-          break;
-        case 3:
-          var streamId = data[2];
-          var binaryStream = self.streams[streamId];
-          if(binaryStream) {
-            binaryStream._onPause();
-          } else {
-            self.emit('error', 'Received `pause` message for unknown stream: ' + streamId);
-          }
-          break;
-        case 4:
-          var streamId = data[2];
-          var binaryStream = self.streams[streamId];
-          if(binaryStream) {
-            binaryStream._onResume();
-          } else {
-            self.emit('error', 'Received `resume` message for unknown stream: ' + streamId);
-          }
-          break;
-        case 5:
-          var streamId = data[2];
-          var binaryStream = self.streams[streamId];
-          if(binaryStream) {
-            binaryStream._onEnd();
-          } else {
-            self.emit('error', 'Received `end` message for unknown stream: ' + streamId);
-          }
-          break;
-        case 6:
-          var streamId = data[2];
-          var binaryStream = self.streams[streamId];
-          if(binaryStream) {
-            binaryStream._onClose();
-          } else {
-            self.emit('error', 'Received `close` message for unknown stream: ' + streamId);
-          }
-          break;
-        default:
-          self.emit('error', 'Unrecognized message type received: ' + data[0]);
+  var stream = new Stream()
+  var parser = new Parser()
+  var count = 0
+  if(!path || !path.length)
+    path = null
+  parser.onValue = function () {
+    if(!this.root && this.stack.length == 1){
+      stream.root = this.value
       }
-    });
-  });
-}
+    if(!path || this.stack.length !== path.length)
+      return
+    var _path = []
+    for( var i = 0; i < (path.length - 1); i++) {
+      var key = path[i]
+      var c = this.stack[1 + (+i)]
 
-util.inherits(BinaryClient, EventEmitter);
+      if(!c) {
+        return
+      }
+      var m = check(key, c.key)
+      _path.push(c.key)
 
-BinaryClient.prototype.send = function(data, meta){
-  var stream = this.createStream(meta);
-  if(data instanceof Stream) {
-    data.pipe(stream);
-  } else if (util.isNode === true) {
-    if(Buffer.isBuffer(data)) {
-      (new BufferReadStream(data, {chunkSize: this._options.chunkSize})).pipe(stream);
-    } else {
-      stream.write(data);
-    } 
-  } else if (util.isNode !== true) {
-    if(data.constructor == Blob || data.constructor == File) {
-      (new BlobReadStream(data, {chunkSize: this._options.chunkSize})).pipe(stream);
-    } else if (data.constructor == ArrayBuffer) {
-      var blob;
-      if(binaryFeatures.useArrayBufferView) {
-        data = new Uint8Array(data);
+       if(!m)
+        return
+
+    }
+    var c = this
+
+    var key = path[path.length - 1]
+      var m = check(key, c.key)
+     if(!m)
+      return
+      _path.push(c.key)
+
+  count ++
+  stream.emit('data', this.value[this.key])
+  }
+
+  parser._onToken = parser.onToken;
+
+  parser.onToken = function (token, value) {
+    parser._onToken(token, value);
+    if (this.stack.length === 0) {
+      if (stream.root) {
+        if(!path)
+          stream.emit('data', stream.root)
+        stream.emit('root', stream.root, count)
+        count = 0;
+        stream.root = null;
       }
-      if(binaryFeatures.useBlobBuilder) {
-        var builder = new BlobBuilder();
-        builder.append(data);
-        blob = builder.getBlob()
-      } else {
-        blob = new Blob([data]);
-      }
-      (new BlobReadStream(blob, {chunkSize: this._options.chunkSize})).pipe(stream);
-    } else if (typeof data === 'object' && 'BYTES_PER_ELEMENT' in data) {
-      var blob;
-      if(!binaryFeatures.useArrayBufferView) {
-        // Warn
-        data = data.buffer;
-      }
-      if(binaryFeatures.useBlobBuilder) {
-        var builder = new BlobBuilder();
-        builder.append(data);
-        blob = builder.getBlob()
-      } else {
-        blob = new Blob([data]);
-      }
-      (new BlobReadStream(blob, {chunkSize: this._options.chunkSize})).pipe(stream);
-    } else {
-      stream.write(data);
     }
   }
-  return stream;
-};
 
-BinaryClient.prototype._receiveStream = function(streamId){
-  var self = this;
-  var binaryStream = new BinaryStream(this._socket, streamId, false);
-  binaryStream.on('close', function(){
-    delete self.streams[streamId];
-  });
-  this.streams[streamId] = binaryStream;
-  return binaryStream;
-};
-
-BinaryClient.prototype.createStream = function(meta){
-  if(this._socket.readyState !== WebSocket.OPEN) {
-    throw new Error('Client is not yet connected or has closed');
-    return;
+  parser.onError = function (err) {
+    stream.emit('error', err)
   }
-  var self = this;
-  var streamId = this._nextId;
-  this._nextId += 2;
-  var binaryStream = new BinaryStream(this._socket, streamId, true, meta);
-  binaryStream.on('close', function(){
-    delete self.streams[streamId];
-  });
-  this.streams[streamId] = binaryStream;
-  return binaryStream;
+  stream.readable = true
+  stream.writable = true
+  stream.write = function (chunk) {
+    if('string' === typeof chunk) {
+      if ('undefined' === typeof Buffer) {
+        var buf = new Array(chunk.length)
+        for (var i = 0; i < chunk.length; i++) buf[i] = chunk.charCodeAt(i)
+        chunk = new Int32Array(buf)
+      } else {
+        chunk = new Buffer(chunk)
+      }
+    }
+    parser.write(chunk)
+  }
+  stream.end = function (data) {
+    if(data)
+      stream.write(data)
+    stream.emit('end')
+  }
+
+  stream.destroy = function () {
+    stream.emit('close');
+  }
+
+  return stream
+}
+
+function check (x, y) {
+  if ('string' === typeof x)
+    return y == x
+  else if (x && 'function' === typeof x.exec)
+    return x.exec(y)
+  else if ('boolean' === typeof x)
+    return x
+  else if ('function' === typeof x)
+    return x(y)
+  return false
+}
+
+exports.stringify = function (op, sep, cl) {
+  if (op === false){
+    op = ''
+    sep = '\n'
+    cl = ''
+  } else if (op == null) {
+
+    op = '[\n'
+    sep = '\n,\n'
+    cl = '\n]\n'
+
+  }
+
+  //else, what ever you like
+
+  var stream = new Stream ()
+    , first = true
+    , ended = false
+    , anyData = false
+  stream.write = function (data) {
+    anyData = true
+    var json = JSON.stringify(data)
+    if(first) { first = false ; stream.emit('data', op + json)}
+    else stream.emit('data', sep + json)
+  }
+  stream.end = function (data) {
+    if(ended)
+      return
+    ended = true
+    if(data) stream.write(data)
+    if(!anyData) stream.emit('data', op)
+    stream.emit('data', cl)
+
+    stream.emit('end')
+  }
+  stream.writable = true
+  stream.readable = true
+
+  return stream
+}
+
+exports.stringifyObject = function (op, sep, cl) {
+  if (op === false){
+    op = ''
+    sep = '\n'
+    cl = ''
+  } else if (op == null) {
+
+    op = '{\n'
+    sep = '\n,\n'
+    cl = '\n}\n'
+
+  }
+
+  //else, what ever you like
+
+  var stream = new Stream ()
+    , first = true
+    , ended = false
+    , anyData = false
+  stream.write = function (data) {
+    anyData = true
+    var json = JSON.stringify(data[0]) + ':' + JSON.stringify(data[1])
+    if(first) { first = false ; stream.emit('data', op + json)}
+    else stream.emit('data', sep + json)
+  }
+  stream.end = function (data) {
+    if(ended) return
+    ended = true
+    if(data) stream.write(data)
+    if(!anyData) stream.emit('data', op)
+    stream.emit('data', cl)
+
+    stream.emit('end')
+  }
+  stream.writable = true
+  stream.readable = true
+
+  return stream
+}
+});
+
+require.define("/browserfarm/node_modules/JSONStream/node_modules/jsonparse/package.json",function(require,module,exports,__dirname,__filename,process){module.exports = {"main":"jsonparse.js"}});
+
+require.define("/browserfarm/node_modules/JSONStream/node_modules/jsonparse/jsonparse.js",function(require,module,exports,__dirname,__filename,process){/*global Buffer*/
+// Named constants with unique integer values
+var C = {};
+// Tokens
+var LEFT_BRACE    = C.LEFT_BRACE    = 0x1;
+var RIGHT_BRACE   = C.RIGHT_BRACE   = 0x2;
+var LEFT_BRACKET  = C.LEFT_BRACKET  = 0x3;
+var RIGHT_BRACKET = C.RIGHT_BRACKET = 0x4;
+var COLON         = C.COLON         = 0x5;
+var COMMA         = C.COMMA         = 0x6;
+var TRUE          = C.TRUE          = 0x7;
+var FALSE         = C.FALSE         = 0x8;
+var NULL          = C.NULL          = 0x9;
+var STRING        = C.STRING        = 0xa;
+var NUMBER        = C.NUMBER        = 0xb;
+// Tokenizer States
+var START   = C.START   = 0x11;
+var TRUE1   = C.TRUE1   = 0x21;
+var TRUE2   = C.TRUE2   = 0x22;
+var TRUE3   = C.TRUE3   = 0x23;
+var FALSE1  = C.FALSE1  = 0x31;
+var FALSE2  = C.FALSE2  = 0x32;
+var FALSE3  = C.FALSE3  = 0x33;
+var FALSE4  = C.FALSE4  = 0x34;
+var NULL1   = C.NULL1   = 0x41;
+var NULL2   = C.NULL3   = 0x42;
+var NULL3   = C.NULL2   = 0x43;
+var NUMBER1 = C.NUMBER1 = 0x51;
+var NUMBER2 = C.NUMBER2 = 0x52;
+var NUMBER3 = C.NUMBER3 = 0x53;
+var NUMBER4 = C.NUMBER4 = 0x54;
+var NUMBER5 = C.NUMBER5 = 0x55;
+var NUMBER6 = C.NUMBER6 = 0x56;
+var NUMBER7 = C.NUMBER7 = 0x57;
+var NUMBER8 = C.NUMBER8 = 0x58;
+var STRING1 = C.STRING1 = 0x61;
+var STRING2 = C.STRING2 = 0x62;
+var STRING3 = C.STRING3 = 0x63;
+var STRING4 = C.STRING4 = 0x64;
+var STRING5 = C.STRING5 = 0x65;
+var STRING6 = C.STRING6 = 0x66;
+// Parser States
+var VALUE   = C.VALUE   = 0x71;
+var KEY     = C.KEY     = 0x72;
+// Parser Modes
+var OBJECT  = C.OBJECT  = 0x81;
+var ARRAY   = C.ARRAY   = 0x82;
+
+// Slow code to string converter (only used when throwing syntax errors)
+function toknam(code) {
+  var keys = Object.keys(C);
+  for (var i = 0, l = keys.length; i < l; i++) {
+    var key = keys[i];
+    if (C[key] === code) { return key; }
+  }
+  return code && ("0x" + code.toString(16));
+}
+
+
+function Parser() {
+  this.tState = START;
+  this.value = undefined;
+
+  this.string = undefined; // string data
+  this.unicode = undefined; // unicode escapes
+
+  // For number parsing
+  this.negative = undefined;
+  this.magnatude = undefined;
+  this.position = undefined;
+  this.exponent = undefined;
+  this.negativeExponent = undefined;
+  
+  this.key = undefined;
+  this.mode = undefined;
+  this.stack = [];
+  this.state = VALUE;
+}
+var proto = Parser.prototype;
+proto.charError = function (buffer, i) {
+  this.onError(new Error("Unexpected " + JSON.stringify(String.fromCharCode(buffer[i])) + " at position " + i + " in state " + toknam(this.tState)));
+};
+proto.onError = function (err) { throw err; };
+proto.write = function (buffer) {
+  if (typeof buffer === "string") buffer = new Buffer(buffer);
+  //process.stdout.write("Input: ");
+  //console.dir(buffer.toString());
+  var n;
+  for (var i = 0, l = buffer.length; i < l; i++) {
+    switch (this.tState) {
+    case START:
+      n = buffer[i];
+      switch (n) {
+      case 0x7b: this.onToken(LEFT_BRACE, "{"); break; // {
+      case 0x7d: this.onToken(RIGHT_BRACE, "}"); break; // }
+      case 0x5b: this.onToken(LEFT_BRACKET, "["); break; // [
+      case 0x5d: this.onToken(RIGHT_BRACKET, "]"); break; // ]
+      case 0x3a: this.onToken(COLON, ":"); break; // :
+      case 0x2c: this.onToken(COMMA, ","); break; // ,
+      case 0x74: this.tState = TRUE1; break; // t
+      case 0x66: this.tState = FALSE1; break; // f
+      case 0x6e: this.tState = NULL1; break; // n
+      case 0x22: this.string = ""; this.tState = STRING1; break; // "
+      case 0x2d: this.negative = true; this.tState = NUMBER1; break; // -
+      case 0x30: this.magnatude = 0; this.tState = NUMBER2; break; // 0
+      default:
+        if (n > 0x30 && n < 0x40) { // 1-9
+          this.magnatude = n - 0x30; this.tState = NUMBER3;
+        } else if (n === 0x20 || n === 0x09 || n === 0x0a || n === 0x0d) {
+          // whitespace
+        } else { this.charError(buffer, i); }
+        break;
+      }
+      break;
+    case STRING1: // After open quote
+      n = buffer[i];
+      // TODO: Handle native utf8 characters, this code assumes ASCII input
+      if (n === 0x22) { this.tState = START; this.onToken(STRING, this.string); this.string = undefined; }
+      else if (n === 0x5c) { this.tState = STRING2; }
+      else if (n >= 0x20) { this.string += String.fromCharCode(n); }
+      else { this.charError(buffer, i); }
+      break;
+    case STRING2: // After backslash
+      n = buffer[i];
+      switch (n) {
+      case 0x22: this.string += "\""; this.tState = STRING1; break;
+      case 0x5c: this.string += "\\"; this.tState = STRING1; break;
+      case 0x2f: this.string += "\/"; this.tState = STRING1; break;
+      case 0x62: this.string += "\b"; this.tState = STRING1; break;
+      case 0x66: this.string += "\f"; this.tState = STRING1; break;
+      case 0x6e: this.string += "\n"; this.tState = STRING1; break;
+      case 0x72: this.string += "\r"; this.tState = STRING1; break;
+      case 0x74: this.string += "\t"; this.tState = STRING1; break;
+      case 0x75: this.unicode = ""; this.tState = STRING3; break;
+      default: this.charError(buffer, i); break;
+      }
+      break;
+    case STRING3: case STRING4: case STRING5: case STRING6: // unicode hex codes
+      n = buffer[i];
+      // 0-9 A-F a-f
+      if ((n >= 0x30 && n < 0x40) || (n > 0x40 && n <= 0x46) || (n > 0x60 && n <= 0x66)) {
+        this.unicode += String.fromCharCode(n);
+        if (this.tState++ === STRING6) {
+          this.string += String.fromCharCode(parseInt(this.unicode, 16));
+          this.unicode = undefined;
+          this.tState = STRING1; 
+        }
+      } else {
+        this.charError(buffer, i);
+      }
+      break;
+    case NUMBER1: // after minus
+      n = buffer[i];
+      if (n === 0x30) { this.magnatude = 0; this.tState = NUMBER2; }
+      else if (n > 0x30 && n < 0x40) { this.magnatude = n - 0x30; this.tState = NUMBER3; }
+      else { this.charError(buffer, i); }
+      break;
+    case NUMBER2: // * After initial zero
+      switch (buffer[i]) {
+      case 0x2e: // .
+        this.position = 0.1; this.tState = NUMBER4; break;
+      case 0x65: case 0x45: // e/E
+        this.exponent = 0; this.tState = NUMBER6; break;
+      default:
+        this.tState = START;
+        this.onToken(NUMBER, 0);
+        this.magnatude = undefined;
+        this.negative = undefined;
+        i--;
+        break;
+      }
+      break;
+    case NUMBER3: // * After digit (before period)
+      n = buffer[i];
+      switch (n) {
+      case 0x2e: // .
+        this.position = 0.1; this.tState = NUMBER4; break;
+      case 0x65: case 0x45: // e/E
+        this.exponent = 0; this.tState = NUMBER6; break;
+      default: 
+        if (n >= 0x30 && n < 0x40) { this.magnatude = this.magnatude * 10 + n - 0x30; }
+        else {
+          this.tState = START; 
+          if (this.negative) {
+            this.magnatude = -this.magnatude;
+            this.negative = undefined;
+          }
+          this.onToken(NUMBER, this.magnatude); 
+          this.magnatude = undefined;
+          i--;
+        }
+        break;
+      }
+      break;
+    case NUMBER4: // After period
+      n = buffer[i];
+      if (n >= 0x30 && n < 0x40) { // 0-9
+        this.magnatude += this.position * (n - 0x30);
+        this.position /= 10;
+        this.tState = NUMBER5; 
+      } else { this.charError(buffer, i); }
+      break;
+    case NUMBER5: // * After digit (after period)
+      n = buffer[i];
+      if (n >= 0x30 && n < 0x40) { // 0-9
+        this.magnatude += this.position * (n - 0x30);
+        this.position /= 10;
+      }
+      else if (n === 0x65 || n === 0x45) { this.exponent = 0; this.tState = NUMBER6; } // E/e
+      else {
+        this.tState = START; 
+        if (this.negative) {
+          this.magnatude = -this.magnatude;
+          this.negative = undefined;
+        }
+        this.onToken(NUMBER, this.negative ? -this.magnatude : this.magnatude); 
+        this.magnatude = undefined;
+        this.position = undefined;
+        i--; 
+      }
+      break;
+    case NUMBER6: // After E
+      n = buffer[i];
+      if (n === 0x2b || n === 0x2d) { // +/-
+        if (n === 0x2d) { this.negativeExponent = true; }
+        this.tState = NUMBER7;
+      }
+      else if (n >= 0x30 && n < 0x40) {
+        this.exponent = this.exponent * 10 + (n - 0x30);
+        this.tState = NUMBER8;
+      }
+      else { this.charError(buffer, i); }  
+      break;
+    case NUMBER7: // After +/-
+      n = buffer[i];
+      if (n >= 0x30 && n < 0x40) { // 0-9
+        this.exponent = this.exponent * 10 + (n - 0x30);
+        this.tState = NUMBER8;
+      }
+      else { this.charError(buffer, i); }  
+      break;
+    case NUMBER8: // * After digit (after +/-)
+      n = buffer[i];
+      if (n >= 0x30 && n < 0x40) { // 0-9
+        this.exponent = this.exponent * 10 + (n - 0x30);
+      }
+      else {
+        if (this.negativeExponent) {
+          this.exponent = -this.exponent;
+          this.negativeExponent = undefined;
+        }
+        this.magnatude *= Math.pow(10, this.exponent);
+        this.exponent = undefined;
+        if (this.negative) { 
+          this.magnatude = -this.magnatude;
+          this.negative = undefined;
+        }
+        this.tState = START;
+        this.onToken(NUMBER, this.magnatude);
+        this.magnatude = undefined;
+        i--; 
+      }  
+      break;
+    case TRUE1: // r
+      if (buffer[i] === 0x72) { this.tState = TRUE2; }
+      else { this.charError(buffer, i); }
+      break;
+    case TRUE2: // u
+      if (buffer[i] === 0x75) { this.tState = TRUE3; }
+      else { this.charError(buffer, i); }
+      break;
+    case TRUE3: // e
+      if (buffer[i] === 0x65) { this.tState = START; this.onToken(TRUE, true); }
+      else { this.charError(buffer, i); }
+      break;
+    case FALSE1: // a
+      if (buffer[i] === 0x61) { this.tState = FALSE2; }
+      else { this.charError(buffer, i); }
+      break;
+    case FALSE2: // l
+      if (buffer[i] === 0x6c) { this.tState = FALSE3; }
+      else { this.charError(buffer, i); }
+      break;
+    case FALSE3: // s
+      if (buffer[i] === 0x73) { this.tState = FALSE4; }
+      else { this.charError(buffer, i); }
+      break;
+    case FALSE4: // e
+      if (buffer[i] === 0x65) { this.tState = START; this.onToken(FALSE, false); }
+      else { this.charError(buffer, i); }
+      break;
+    case NULL1: // u
+      if (buffer[i] === 0x75) { this.tState = NULL2; }
+      else { this.charError(buffer, i); }
+      break;
+    case NULL2: // l
+      if (buffer[i] === 0x6c) { this.tState = NULL3; }
+      else { this.charError(buffer, i); }
+      break;
+    case NULL3: // l
+      if (buffer[i] === 0x6c) { this.tState = START; this.onToken(NULL, null); }
+      else { this.charError(buffer, i); }
+      break;
+    }
+  }
+};
+proto.onToken = function (token, value) {
+  // Override this to get events
 };
 
-BinaryClient.prototype.close = BinaryClient.prototype.destroy = function(code, message) {
-  this._socket.close(code, message);
+proto.parseError = function (token, value) {
+  this.onError(new Error("Unexpected " + toknam(token) + (value ? ("(" + JSON.stringify(value) + ")") : "") + " in state " + toknam(this.state)));
+};
+proto.onError = function (err) { throw err; };
+proto.push = function () {
+  this.stack.push({value: this.value, key: this.key, mode: this.mode});
+};
+proto.pop = function () {
+  var value = this.value;
+  var parent = this.stack.pop();
+  this.value = parent.value;
+  this.key = parent.key;
+  this.mode = parent.mode;
+  this.emit(value);
+  if (!this.mode) { this.state = VALUE; }
+};
+proto.emit = function (value) {
+  if (this.mode) { this.state = COMMA; }
+  this.onValue(value);
+};
+proto.onValue = function (value) {
+  // Override me
+};  
+proto.onToken = function (token, value) {
+  //console.log("OnToken: state=%s token=%s %s", toknam(this.state), toknam(token), value?JSON.stringify(value):"");
+  switch (this.state) {
+  case VALUE:
+    switch (token) {
+    case STRING: case NUMBER: case TRUE: case FALSE: case NULL:
+      if (this.value) {
+        this.value[this.key] = value;
+      }
+      this.emit(value);
+    break;  
+    case LEFT_BRACE:
+      this.push();
+      if (this.value) {
+        this.value = this.value[this.key] = {};
+      } else {
+        this.value = {};
+      }
+      this.key = undefined;
+      this.state = KEY;
+      this.mode = OBJECT;
+      break;
+    case LEFT_BRACKET:
+      this.push();
+      if (this.value) {
+        this.value = this.value[this.key] = [];
+      } else {
+        this.value = [];
+      }
+      this.key = 0;
+      this.mode = ARRAY;
+      this.state = VALUE;
+      break;
+    case RIGHT_BRACE:
+      if (this.mode === OBJECT) {
+        this.pop();
+      } else {
+        this.parseError(token, value);
+      }
+      break;
+    case RIGHT_BRACKET:
+      if (this.mode === ARRAY) {
+        this.pop();
+      } else {
+        this.parseError(token, value);
+      }
+      break;
+    default:
+      this.parseError(token, value); break;
+    }
+    break;
+  case KEY:
+    if (token === STRING) {
+      this.key = value;
+      this.state = COLON;
+    } else if (token === RIGHT_BRACE) {
+      this.pop();
+    } else {
+      this.parseError(token, value);
+    }
+    break;
+  case COLON:
+    if (token === COLON) { this.state = VALUE; }
+    else { this.parseError(token, value); }
+    break;
+  case COMMA:
+    if (token === COMMA) { 
+      if (this.mode === ARRAY) { this.key++; this.state = VALUE; }
+      else if (this.mode === OBJECT) { this.state = KEY; }
+
+    } else if (token === RIGHT_BRACKET && this.mode === ARRAY || token === RIGHT_BRACE && this.mode === OBJECT) {
+      this.pop();
+    } else {
+      this.parseError(token, value);
+    }
+    break;
+  default:
+    this.parseError(token, value);
+  }
 };
 
+module.exports = Parser;
+});
 
-exports.BinaryClient = BinaryClient;
+require.define("/node_modules/websocket-stream/package.json",function(require,module,exports,__dirname,__filename,process){module.exports = {}});
 
-})(this);console.log('hiii')
-var client = new BinaryClient('ws://localhost:9000')
+require.define("/node_modules/websocket-stream/index.js",function(require,module,exports,__dirname,__filename,process){var stream = require('stream')
+var util = require('util')
+
+function WebsocketStream(server, protocol) {
+  var self = this
+  stream.Stream.call(this)
+  this.readable = true
+  this.writable = true
+  if (typeof server === "object") {
+    this.ws = server
+    this.ws.on('message', this.onMessage.bind(this))
+    this.ws.on('error', this.onError.bind(this))
+    this.ws.on('close', this.onClose.bind(this))
+    this.ws.on('open', function() {
+      self.emit('open')
+    })
+  } else {
+    this.ws = new WebSocket(server, protocol)
+    this.ws.onmessage = this.onMessage.bind(this)
+    this.ws.onerror = this.onError.bind(this)
+    this.ws.onclose = this.onClose.bind(this)
+  }
+}
+
+util.inherits(WebsocketStream, stream.Stream)
+
+module.exports = function(server, protocol) {
+  return new WebsocketStream(server, protocol)
+}
+
+module.exports.WebsocketStream = WebsocketStream
+
+WebsocketStream.prototype.onMessage = function(e, flags) {
+  this.emit('metadata', e, flags)
+  this.emit('data', e.data)
+}
+
+WebsocketStream.prototype.onError = function(err) {
+  this.emit('error', err)
+}
+
+WebsocketStream.prototype.onClose = function(err) {
+  this.emit('end')
+}
+
+WebsocketStream.prototype.write = function(data, options) {
+  return this.ws.send(data, options)
+}
+
+WebsocketStream.prototype.end = function() {
+  this.ws.close()
+}
+});
+
+require.define("/browserfarm/assets/worker.js",function(require,module,exports,__dirname,__filename,process){var emitStream = require('emit-stream')
+var JSONStream = require('JSONStream')
+var websocket = require('websocket-stream')
+
+var client = websocket('ws://localhost:9000')
+client = client.pipe(JSONStream.parse([true]))
+var events = emitStream(client)
+events.on('foo', function(data) { console.log(data) })
+});
+require("/browserfarm/assets/worker.js");
+})();
